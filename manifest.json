@@ -1,13 +1,13 @@
 {
   "manifest_version": 3,
   "name": "IOCScout",
-  "version": "1.5",
+  "version": "1.6",
   "description": "Collect IOCs from phishing pages.",
   "permissions": [
-    "scripting",
-    "tabs",
+    "activeTab",
     "storage",
-    "activeTab"
+    "scripting",
+    "tabs"
   ],
   "host_permissions": [
     "<all_urls>"

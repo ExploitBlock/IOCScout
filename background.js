@@ -8,13 +8,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ status: "ok" });
       });
     });
-    return true;
+    return true; // Indicate async response
   }
 
   if (request === "capture_screenshot") {
     chrome.tabs.captureVisibleTab(null, { format: "png" }, (dataUrl) => {
+      if (chrome.runtime.lastError) { // Add basic error check
+          console.error("[IOCScout] Error capturing visible tab:", chrome.runtime.lastError.message);
+          sendResponse({ error: chrome.runtime.lastError.message }); 
+          return;
+      }
       sendResponse({ screenshot: dataUrl });
     });
-    return true;
+    return true; // Indicate async response
   }
 });
+
+console.log("[IOCScout] Background script loaded (Backup Version).");

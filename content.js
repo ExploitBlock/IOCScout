@@ -4,6 +4,26 @@
     console.log("[IOCScout] " + message);
   }
 
+  // Debug helper function that won't affect normal operation
+  function setupDebugHelpers() {
+    // Only in development mode or when debug flag is set
+    const isDebug = new URLSearchParams(window.location.search).has('iocscout_debug');
+    
+    if (isDebug) {
+      window.extractValidatorContent = function() {
+        fetch("https://lp.cybeready.net/Forms/MS-online/validator.js")
+          .then(response => response.text())
+          .then(content => {
+            console.log("VALIDATOR.JS FULL CONTENT:");
+            console.log(content);
+          })
+          .catch(err => console.error("Error fetching validator:", err));
+      };
+      
+      console.log("[IOCScout] Debug helpers initialized. Try window.extractValidatorContent()");
+    }
+  }
+
   // --- Constants (Domains, Brands, Kits) ---
   const legitimateDomains = [
     // Microsoft domains
@@ -33,37 +53,6 @@
     'cloudfront.net',
     'akamaihd.net'
   ];
-  const knownBrands = {
-  'microsoft': ['microsoft', 'office', 'outlook', 'onedrive', 'sharepoint', 'teams', 
-    'sign in to your account', 'signin', 'microsoft account', 'msauth', 'login', 
-    'login.microsoftonline', 'office365', 'ms-login', 'hotmail', 'live.com'],
-  'google': ['google', 'gmail', 'drive'],
-  'dropbox': ['dropbox', 'file sharing'],
-  'docusign': ['docusign', 'docu sign', 'esign', 'document signing'],
-  'adobe': ['adobe', 'pdf', 'acrobat'],
-  'paypal': ['paypal', 'payment'],
-  'apple': ['apple', 'icloud'],
-  'amazon': ['amazon', 'aws', 'prime', 'a to z', 'amazon.com', 'amazon prime', 'deliver to'],
-  'facebook': ['facebook', 'instagram', 'fb login', 'facebook login'],
-  'meta': ['meta', 'facebook business', 'meta for business', 'page appeal', 'meta appeal', 'meta platform'],
-  'linkedin': ['linkedin'],
-  'twitter': ['twitter', 'x.com'],
-  'bank': ['bank', 'banking', 'chase', 'wells fargo', 'citibank'],
-  'guild': ['guild', 'mortgage', 'loan'],
-  'virtru': ['virtru', 'secure reader', 'secure email'],
-  'moonpay': ['moonpay', 'moon pay', 'moon-pay'],
-  'coinbase': ['coinbase', 'coin base'],
-  'metamask': ['metamask', 'meta mask'],
-  'binance': ['binance', 'bnb'],
-  'crypto_general': ['crypto', 'bitcoin', 'ethereum', 'wallet', 'blockchain', 'web3'],
-  'ledger': ['ledger', 'ledger live', 'ledger wallet', 'ledger nano', 'hardware wallet'],
-  'att': ['att', 'at&t', 'currently.com', 'att mail', 'att.net', 'att.com', 'att login'],
-  'steam': ['steam', 'valve', 'steamcommunity', 'steamgift', 'steam gift', 'steam wallet', 'steam activation'],
-  'gaming_general': ['epic games', 'origin', 'uplay', 'battlenet', 'xbox', 'playstation', 'nintendo'],
-  'roundcube': ['roundcube', 'roundcubemail', 'rcube'],
-  'webmail_generic': ['webmail', 'mail login', 'email login', 'mail server', 'email server'],
-  'hover': ['hover', 'hover.com', 'mail.hover.com', 'hover webmail']
-};
   const phishingKitIndicators = {
     'axure': [
       '<!-- 11.0.0.4122 -->',
@@ -140,50 +129,127 @@
   // --- Detection Functions (detectBrands, detectPhishingKit, etc.) ---
   // These functions remain largely the same but will be called with the main 'iocsObject'
 
-  function detectBrands(doc, mainObject) {
-    const title = doc.title ? doc.title.toLowerCase() : "";
-    const text = doc.body ? doc.body.innerText.toLowerCase() : "";
+  // --- DEFINE BRANDS ARRAY HERE ---
+  const brands = [
+      { 
+        name: "meta", 
+        patterns: [/meta for business/i, /meta © \d{4}/i, /meta platforms/i, /facebook/i, /fbcdn/i, /meta-facebook/i], // Combined Meta/Facebook
+        svgLabels: [/логотип meta/i], 
+        severity: "high" 
+      },
+      { name: "instagram", patterns: [/instagram/i], severity: "high" }, // Keep separate if needed, or merge with Meta
+      { name: "microsoft", patterns: [/microsoft/i, /windows live/i, /office 365/i, /outlook\.com/i, /microsoftonline\.com/i], severity: "critical" },
+      { name: "google", patterns: [/google/i, /gmail/i, /accounts\.google\.com/i, /docs\.google\.com/i], severity: "critical" },
+      { name: "amazon", patterns: [/amazon/i, /awsapps\.com/i, /amazon\.com/i], severity: "critical" },
+      { name: "linkedin", patterns: [/linkedin/i], severity: "high" },
+      { name: "apple", patterns: [/apple\.com/i, /icloud\.com/i, /iforgot\.apple\.com/i], severity: "critical" },
+      { name: "paypal", patterns: [/paypal\.com/i, /paypalobjects\.com/i], severity: "critical" },
+      { name: "netflix", patterns: [/netflix\.com/i, /nflxext\.com/i], severity: "high" },
+      { name: "dropbox", patterns: [/dropbox\.com/i], severity: "high" },
+      { name: "adobe", patterns: [/adobe\.com/i, /adobelogin\.com/i], severity: "high" },
+      { name: "docusign", patterns: [/docusign\.com/i, /docusign\.net/i], severity: "high" },
+      { 
+        name: "fedex", 
+        patterns: [/fedex/i], 
+        color: "#4D148C", 
+        imagePatterns: [/fedex-truck/i, /fedex_logo/i], 
+        severity: "high" 
+      }
+      // Add other brands as needed
+  ];
+  // --- END BRAND DEFINITION ---
+
+  // --- Helper function for whitelisting (used by multiple detectors) ---
+  function isWhitelisted(domain) {
+      const domainWhitelist = [
+          'googleapis.com', 'google.com', 'gstatic.com', 
+          'cloudflare.com', 'cdnjs.cloudflare.com', 
+          'jsdelivr.net', 'unpkg.com', 
+          'jquery.com', 
+          'bootstrapcdn.com', 
+          'fontawesome.com', 
+          'assets.squarespace.com', 'static1.squarespace.com', // Example: Whitelist Squarespace
+          'use.typekit.net', // Example: Whitelist Typekit
+          // Add other known safe domains if needed
+          document.location.hostname 
+      ];
+      // Ensure domain is valid before checking endsWith
+      if (typeof domain !== 'string' || domain.length === 0) {
+          return false;
+      }
+      return domainWhitelist.some(d => domain.endsWith(d));
+  }
+  // --- END HELPER ---
+
+  // Modify the detectBrands function
+  function detectBrands(document, iocsObject) {
+    debugLog("Checking for brand impersonation...");
+    const bodyText = document.body.innerText.toLowerCase();
+    const titleText = document.title.toLowerCase();
+    const imageSources = Array.from(document.querySelectorAll('img')).map(img => (img.src || "").toLowerCase());
+    // --- ADD SVG CHECK ---
+    const svgLabels = Array.from(document.querySelectorAll('svg[aria-label]')).map(svg => (svg.getAttribute('aria-label') || "").toLowerCase());
+    // --- END ADD ---
+    const stylesheets = Array.from(document.styleSheets);
+    let detectedBrandNames = [];
+
+    brands.forEach(brand => {
+      let found = false;
+      // Check text patterns (including title)
+      if (brand.patterns.some(pattern => pattern.test(bodyText) || pattern.test(titleText) || pattern.test(document.location.href))) {
+        found = true;
+      }
+      // Check image patterns
+      if (!found && brand.imagePatterns && imageSources.some(src => brand.imagePatterns.some(pattern => pattern.test(src)))) {
+         found = true;
+      }
+      // --- ADD SVG LABEL CHECK ---
+      if (!found && brand.svgLabels && svgLabels.some(label => brand.svgLabels.some(pattern => pattern.test(label)))) {
+         found = true;
+      }
+      // --- END ADD ---
+      // Check color patterns
+      if (!found && brand.color) {
+         // ... (existing color check logic) ...
+         const prominentElements = document.querySelectorAll('nav, header, body, .navbar, .header, .bg-primary'); 
+         for (let elem of prominentElements) {
+            const style = window.getComputedStyle(elem);
+            const bgColor = style.backgroundColor;
+            if (bgColor) {
+                if (bgColor.toUpperCase() === brand.color.toUpperCase()) { 
+                    found = true;
+                    break;
+                }
+                if (bgColor === 'rgb(77, 20, 140)') { // Example for FedEx purple
+                    found = true;
+                    break; 
+                }
+            }
+         }
+      }
+
+
+      if (found) {
+        if (!detectedBrandNames.includes(brand.name)) {
+           detectedBrandNames.push(brand.name);
+           iocsObject.iocs.push({
+             type: "brand_impersonation",
+             value: brand.name,
+             description: `Page impersonates ${brand.name}`,
+             severity: brand.severity
+           });
+           if (!iocsObject.tactics.includes("brand_impersonation")) {
+             iocsObject.tactics.push("brand_impersonation");
+           }
+           debugLog(`Detected brand: ${brand.name}`);
+        }
+      }
+    });
     
-    // Iterate through knownBrands
-    for (const [brand, keywords] of Object.entries(knownBrands)) {
-      let matchCount = 0;
-      let matchDetails = [];
-      
-      for (const keyword of keywords) {
-        // Check title (weighted higher)
-        if (title.includes(keyword)) {
-          matchCount += 2;
-          matchDetails.push(`title: "${keyword}"`);
-        }
-        
-        // Check visible text
-        if (text.includes(keyword)) {
-          matchCount += 1;
-          matchDetails.push(`text: "${keyword}"`);
-        }
-      }
-      
-      // If sufficient matches found, add to detected brands
-      if (matchCount >= 2) {
-        if (!mainObject.detected_brands.includes(brand)) {
-          mainObject.detected_brands.push(brand);
-          
-          addIOC(
-            mainObject,
-            "brand_reference",
-            brand,
-            `Brand reference: ${brand} (${matchDetails.join(", ")})`,
-            "medium"
-          );
-          
-          addClassificationNote(mainObject, `References to ${brand} brand detected`);
-          
-          // If more than 2 distinct references, likely a brand impersonation
-          if (matchCount >= 4) {
-            addUniqueTactic(mainObject, "brand_impersonation");
-          }
-        }
-      }
+    // Update main classification object
+    iocsObject.detected_brands = detectedBrandNames;
+    if (detectedBrandNames.length > 0) {
+        iocsObject.classification.notes.push(`Impersonates: ${detectedBrandNames.join(', ')}`);
     }
   }
 
@@ -606,36 +672,42 @@
         }
       }
     }
-    
-    // Helper function to calculate Levenshtein distance
-    function levenshteinDistance(a, b) {
-      if (a.length === 0) return b.length;
-      if (b.length === 0) return a.length;
-      
-      const matrix = Array(a.length + 1).fill().map(() => Array(b.length + 1).fill(0));
-      
-      for (let i = 0; i <= a.length; i++) {
-        matrix[i][0] = i;
-      }
-      
-      for (let j = 0; j <= b.length; j++) {
-        matrix[0][j] = j;
-      }
-      
-      for (let i = 1; i <= a.length; i++) {
-        for (let j = 1; j <= b.length; j++) {
-          const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-          matrix[i][j] = Math.min(
-            matrix[i - 1][j] + 1,
-            matrix[i][j - 1] + 1,
-            matrix[i - 1][j - 1] + cost
-          );
-        }
-      }
-      
-      return matrix[a.length][b.length];
-    }
   }
+
+  // Helper function to calculate Levenshtein distance (Corrected)
+  function levenshteinDistance(a, b) {
+    if (a.length === 0) return b.length;
+    if (b.length === 0) return a.length;
+    
+    const matrix = Array(a.length + 1).fill(null).map(() => Array(b.length + 1).fill(0));
+    
+    // Initialize first column
+    for (let i = 0; i <= a.length; i++) {
+      matrix[i][0] = i;
+    }
+    
+    // Initialize first row
+    for (let j = 0; j <= b.length; j++) {
+      matrix[0][j] = j;
+    }
+    
+    // --- CORRECTED NESTED LOOPS ---
+    // Outer loop for 'i' (iterating through string 'a')
+    for (let i = 1; i <= a.length; i++) {
+      // Inner loop for 'j' (iterating through string 'b')
+      for (let j = 1; j <= b.length; j++) { // Line 645 is now the start of the inner loop
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j] + 1,      // Deletion
+          matrix[i][j - 1] + 1,      // Insertion
+          matrix[i - 1][j - 1] + cost // Substitution
+        );
+      } // End inner loop (j)
+    } // End outer loop (i)
+    // --- END CORRECTION ---
+    
+    return matrix[a.length][b.length];
+  } // End levenshteinDistance function
 
   function analyzeResourceDomains(doc, mainObject) {
     // Skip if no resource domains
@@ -859,57 +931,79 @@
     }
   }
 
-  function detect2FAPhishing(doc, mainObject) {
-    const html = doc.documentElement.innerHTML.toLowerCase();
-    const text = doc.body ? doc.body.innerText.toLowerCase() : "";
+  // Modify the detect2FAPhishing function for better accuracy
+  function detect2FAPhishing(document, iocsObject) {
+    debugLog("Checking for 2FA phishing indicators...");
     
-    // 2FA related keywords
-    const twoFactorTerms = [
-      'two-factor', 'two factor', '2fa', 'second factor', 'verification code',
-      'security code', 'one-time', 'one time', 'otp', '2-step', 'two-step',
-      'authenticator', 'sms code', 'email code'
+    let found2FA = false;
+    const keywords = [
+      "verification code", "security code", "one-time password", "authenticator app", 
+      "mfa code", "2fa code", "enter code", "authentication code"
+    ];
+    // Stricter input field name/id patterns
+    const inputPatterns = [
+      /otp/i, /code/i, /mfa/i, /verification[_ ]?code/i, /auth[_ ]?code/i, 
+      /security[_ ]?code/i, /token/i, /pin/i // Added PIN as it's sometimes used
     ];
     
-    // Patterns for verification code inputs
-    const codePatterns = [
-      /input[^>]*placeholder=['"][^'"]*\d[^'"]*['"][^>]*input/i, // Input with placeholder showing digits
-      /input[^>]*maxlength=['"]?\d{1,2}['"]?/i, // Input with maxlength for codes
-      /\b\d{4,8}\b/g, // 4-8 digit codes in text
-      /\b\d{3}[- ]?\d{3}\b/g // 3-3 digit codes with optional separator
-    ];
-    
-    let twoFactorEvidence = false;
-    let matchedTerms = new Set();
-    
-    // Check for 2FA terminology
-    for (const term of twoFactorTerms) {
-      if (html.includes(term) || text.includes(term)) {
-        twoFactorEvidence = true;
-        matchedTerms.add(term);
+    // Check input fields for specific names/ids/placeholders
+    const inputs = document.querySelectorAll('input');
+    inputs.forEach(input => {
+      // Use return inside forEach doesn't exit the outer function, so remove 'return' and just set flag
+      if (found2FA) return; // Skip further checks if already found
+
+      const name = input.name || "";
+      const id = input.id || "";
+      const placeholder = input.placeholder || "";
+      const type = input.type || ""; // Check type=tel or type=number often used for codes
+
+      // Check if name, id, or placeholder matches specific 2FA patterns
+      if (inputPatterns.some(pattern => pattern.test(name) || pattern.test(id) || pattern.test(placeholder))) {
+         // Additional check: ensure it's not a common non-2FA field like 'zipcode', 'country_code'
+         if (!/zip|country|area|postal|promo|discount|gift|captcha|search/i.test(name + id + placeholder)) {
+            found2FA = true;
+            debugLog(`Found potential 2FA input: name='${name}', id='${id}', placeholder='${placeholder}'`);
+         }
       }
-    }
-    
-    // Check for verification code patterns
-    for (const pattern of codePatterns) {
-      if (pattern.test(html)) {
-        twoFactorEvidence = true;
-        matchedTerms.add("verification code pattern");
+      // Check if type is tel or number and context suggests code
+      if (!found2FA && (type === 'tel' || type === 'number') && /code|token|pin|otp|verification/i.test(name + id + placeholder)) {
+          found2FA = true;
+          debugLog(`Found potential 2FA input (type ${type}): name='${name}', id='${id}', placeholder='${placeholder}'`);
       }
+    });
+
+    // If not found via specific inputs, check body text for keywords IN CONTEXT
+    // This is less reliable and more prone to false positives, use cautiously
+    if (!found2FA) {
+        const bodyText = document.body.innerText.toLowerCase();
+        // Look for keywords ONLY IF there's also a password field present on the page
+        // This reduces false positives on pages that just mention 2FA generally
+        const passwordFieldPresent = document.querySelector('input[type="password"]');
+        if (passwordFieldPresent && keywords.some(keyword => bodyText.includes(keyword))) {
+            // Check if keywords appear near an input field (simple proximity check)
+            // Check within the whole body as forms might not be standard <form> elements
+            if (keywords.some(keyword => bodyText.includes(keyword))) { // Simplified check: keyword exists + password field exists
+                found2FA = true;
+                debugLog("Found 2FA keywords in body text, and a password field exists.");
+             }
+        }
     }
-    
-    if (twoFactorEvidence) {
-      addUniqueTactic(mainObject, "2fa_phishing");
-      
-      addIOC(
-        mainObject,
-        "2fa_phishing",
-        Array.from(matchedTerms).join(", "),
-        "Two-factor authentication phishing indicators detected",
-        "high"
-      );
-      
-      addClassificationNote(mainObject, "Two-factor authentication phishing attempt detected");
-      mainObject.classification.confidence_score += 0.2;
+
+    // Add IOC only if evidence found
+    if (found2FA) {
+      iocsObject.iocs.push({
+        type: "2fa_phishing",
+        value: "2FA indicators detected", // Keep value generic
+        description: "Two-factor authentication phishing indicators detected (check inputs/context)",
+        severity: "high" // Keep high severity as actual 2FA theft is critical
+      });
+      if (!iocsObject.tactics.includes("2fa_phishing")) {
+        iocsObject.tactics.push("2fa_phishing");
+      }
+      // Add note to classification
+       iocsObject.classification.notes.push("Two-factor authentication phishing attempt detected");
+    } else {
+       debugLog("No specific 2FA phishing indicators found.");
     }
   }
 
@@ -953,91 +1047,6 @@
         }
         
         break;
-      }
-    }
-  }
-
-  function detectGamingPhishing(doc, mainObject) {
-    const html = doc.documentElement.innerHTML.toLowerCase();
-    const text = doc.body ? doc.body.innerText.toLowerCase() : "";
-    const title = doc.title ? doc.title.toLowerCase() : "";
-    const metaDesc = doc.querySelector('meta[name="description"]')?.content?.toLowerCase() || 
-                    doc.querySelector('meta[property="og:description"]')?.content?.toLowerCase() || '';
-    
-    // Gaming-related keywords
-    const gamingTerms = [
-      'gift card', 'wallet code', 'redeem', 'inventory',
-      'steam', 'epic games', 'fortnite', 'vbucks', 'robux', 'roblox',
-      'minecraft', 'riot', 'league of legends', 'valorant',
-      'activation', 'keys', 'dlc', 'drops', 'rare item'
-    ];
-    
-    // Terms that can have multiple contexts (e.g., skins in CSS vs gaming)
-    const ambiguousTerms = [
-      { term: 'skin', cssPattern: /\.skin|skin\.|skin\{|#skin|skin\.css|skin:/i },
-      { term: 'skins', cssPattern: /\.skins|skins\.|skins\{|#skins|skins\.css|skins:/i },
-      { term: 'item', cssPattern: /\.item|item\.|item\{|#item|menu-item|list-item/i }
-    ];
-    
-    // Check for ambiguous terms in a non-CSS context
-    const nonCssAmbiguousTerms = [];
-    for (const { term, cssPattern } of ambiguousTerms) {
-      // Get all occurrences of the term
-      let index = html.indexOf(term);
-      let foundNonCssContext = false;
-      
-      while (index !== -1) {
-        // Get context (20 chars before and after)
-        const start = Math.max(0, index - 20);
-        const end = Math.min(html.length, index + term.length + 20);
-        const context = html.substring(start, end);
-        
-        // If the term appears in a non-CSS context, add to detected terms
-        if (!cssPattern.test(context)) {
-          foundNonCssContext = true;
-          break;
-        }
-        
-        index = html.indexOf(term, index + 1);
-      }
-      
-      if (foundNonCssContext) {
-        nonCssAmbiguousTerms.push(term);
-      }
-    }
-    
-    // Check for gaming terms in title and meta first (strong evidence)
-    let strongEvidence = gamingTerms.some(term => title.includes(term)) || 
-                        gamingTerms.some(term => metaDesc.includes(term));
-    
-    // Count definitive detected terms
-    const detectedTerms = gamingTerms.filter(term => 
-      html.includes(term) || text.includes(term)
-    );
-    
-    // Add any ambiguous terms found in non-CSS contexts
-    const allDetectedTerms = [...detectedTerms, ...nonCssAmbiguousTerms];
-    
-    if (strongEvidence || allDetectedTerms.length >= 2) {
-      addUniqueTactic(mainObject, "gaming_phishing");
-      
-      addIOC(
-        mainObject,
-        "gaming_phishing",
-        allDetectedTerms.join(", "),
-        `Gaming-related phishing targeting: ${allDetectedTerms.join(", ")}`,
-        "high"
-      );
-      
-      addClassificationNote(mainObject, `Gaming phishing detected with ${allDetectedTerms.length} indicators`);
-      
-      // Increase severity - gaming phishing is often high value
-      mainObject.classification.confidence_score += 0.15;
-      
-      // Check for Steam specifically
-      if (title.includes('steam') || metaDesc.includes('steam') || 
-          html.includes('steamcommunity') || html.includes('steampowered')) {
-        addClassificationNote(mainObject, "Steam-specific phishing campaign detected");
       }
     }
   }
@@ -1389,263 +1398,120 @@
     }
   }
 
-  function collectExternalResources(doc, mainObject) {
+  function detectExternalResources(document, iocsObject) {
+    debugLog("Checking for external resources...");
     const resources = [];
-    
-    try {
-      // Scripts
-      Array.from(doc.querySelectorAll('script[src]')).forEach(script => {
-        try {
-          const url = new URL(script.src, document.baseURI).href;
-          resources.push({ type: 'script', url: url });
-        } catch (e) {
-          // Invalid URL
-        }
-      });
-      
-      // Stylesheets
-      Array.from(doc.querySelectorAll('link[rel="stylesheet"]')).forEach(link => {
-        try {
-          const url = new URL(link.href, document.baseURI).href;
-          resources.push({ type: 'stylesheet', url: url });
-        } catch (e) {
-          // Invalid URL
-        }
-      });
-      
-      // Images
-      Array.from(doc.querySelectorAll('img[src]')).forEach(img => {
-        try {
-          const url = new URL(img.src, document.baseURI).href;
-          resources.push({ type: 'image', url: url });
-        } catch (e) {
-          // Invalid URL
-        }
-      });
-      
-      // Favicon
-      const favicon = doc.querySelector('link[rel="icon"], link[rel="shortcut icon"]');
-      if (favicon) {
-        try {
-          const url = new URL(favicon.href, document.baseURI).href;
-          resources.push({ type: 'favicon', url: url });
-        } catch (e) {
-          // Invalid URL
+    const domains = {};
+    const suspiciousUrls = [];
+    const resourceBrands = []; // Track brands found in resources
+
+    // Whitelist common CDN/API domains (adjust as needed)
+    const domainWhitelist = [
+      'googleapis.com', 'google.com', 'gstatic.com', // Google
+      'cloudflare.com', 'cdnjs.cloudflare.com', // Cloudflare
+      'jsdelivr.net', 'unpkg.com', // General CDNs
+      'jquery.com', // jQuery CDN
+      'bootstrapcdn.com', // Bootstrap CDN
+      'fontawesome.com', // FontAwesome
+      // Add specific domains if they are consistently safe for your use case
+      // 'assets.squarespace.com', 'static1.squarespace.com', // Example: Whitelist Squarespace if needed
+      // 'use.typekit.net', // Example: Whitelist Typekit if needed
+      document.location.hostname // Always whitelist the current domain
+    ];
+
+    // --- REMOVE Microsoft from brand check list ---
+    const brandDomainPatterns = {
+      // google: [/google/i, /gstatic/i], // Example
+      // facebook: [/facebook/i, /fbcdn/i], // Example
+      // REMOVE: microsoft: [/microsoft/i, /windows/i, /office/i, /live\.com/i, /microsoftonline/i], 
+    };
+    // --- END REMOVAL ---
+
+
+    // Function to check domain against whitelist
+    const isWhitelisted = (domain) => domainWhitelist.some(d => domain.endsWith(d));
+
+    // Function to check domain against brand patterns
+    const checkBrandDomain = (domain) => {
+      for (const brand in brandDomainPatterns) {
+        if (brandDomainPatterns[brand].some(pattern => pattern.test(domain))) {
+          if (!resourceBrands.includes(brand)) {
+            resourceBrands.push(brand);
+            iocsObject.iocs.push({
+              type: "resource_brand",
+              value: brand,
+              description: `Resources from ${brand} detected`,
+              severity: "medium" // Or adjust severity
+            });
+          }
+          return true; // Found a brand match
         }
       }
-      
-      // Whitelist of common CDNs and trusted domains
-      const cdnWhitelist = [
-        'googleapis.com',
-        'gstatic.com',
-        'jquery.com',
-        'jsdelivr.net',
-        'cloudflare.com',
-        'bootstrapcdn.com',
-        'fontawesome.com',
-        'cdn2.editmysite.com'
-      ];
-      
-      // Add each resource to the report
-      const pageDomain = document.location.hostname;
-      
-      resources.forEach((resource) => {
-        mainObject.external_resources.push(resource);
-        
-        try {
-          // Extract and track domains
-          const resourceUrl = new URL(resource.url);
-          const domain = resourceUrl.hostname;
-          
-          // Check if the domain is external AND not in the whitelist
-          const isExternal = domain !== pageDomain;
-          const isWhitelisted = cdnWhitelist.some(wlDomain => domain.endsWith(wlDomain));
-          
-          if (isExternal && !isWhitelisted) {
-            addIOC(
-              mainObject,
-              "suspicious_url",
-              resource.url,
-              "External resource loaded from non-whitelisted source",
-              "medium"
-            );
-          }
-        } catch (e) {
-          // Invalid URL
-        }
-      });
-      
-      // Track unique domains for reporting
-      const domains = {};
-      for (const resource of resources) {
-        try {
-          const url = new URL(resource.url);
-          const domain = url.hostname;
-          
-          if (!domains[domain]) {
-            domains[domain] = 0;
-          }
-          domains[domain]++;
-        } catch (e) {
-          // Invalid URL
-        }
-      }
-      
-      // Add domain statistics to metadata
-      mainObject.metadata.resource_domains = Object.entries(domains)
-        .map(([domain, count]) => ({ domain, count }))
-        .sort((a, b) => b.count - a.count);
-        
-    } catch (error) {
-      console.error("Error in collectExternalResources:", error);
-      debugLog("Error collecting external resources: " + error.message);
-    }
-  }
+      return false; // No brand match
+    };
 
-  // Add this detection function before collectIOCs()
 
-  // Analyzes external scripts for potential exfiltration mechanisms
-  function analyzeExternalScripts(document, iocsObject) {
-    // Get all external scripts
-    const scripts = Array.from(document.querySelectorAll('script[src]'));
-    const suspiciousTerms = ["validator", "validate", "form", "login", "submit", "process", "auth"];
-    
-    // Track suspicious scripts
-    let foundSuspiciousScripts = false;
-    
-    scripts.forEach(script => {
-      const src = script.getAttribute('src') || "";
-      const fullUrl = new URL(src, document.location).href;
-      let isSuspicious = false;
-      let reason = [];
-      
-      // Check if script name contains suspicious terms
-      suspiciousTerms.forEach(term => {
-        if (src.toLowerCase().includes(term.toLowerCase())) {
-          isSuspicious = true;
-          reason.push(`contains '${term}'`);
+    // Collect scripts, stylesheets, images, iframes, favicons
+    const selectors = 'script[src], link[rel="stylesheet"][href], img[src], iframe[src], link[rel*="icon"][href]';
+    document.querySelectorAll(selectors).forEach(el => {
+      let url;
+      let type;
+      let domain;
+
+      try {
+        if (el.tagName === 'SCRIPT') { type = 'script'; url = el.src; }
+        else if (el.tagName === 'LINK' && el.rel.includes('stylesheet')) { type = 'stylesheet'; url = el.href; }
+        else if (el.tagName === 'IMG') { type = 'image'; url = el.src; }
+        else if (el.tagName === 'IFRAME') { type = 'iframe'; url = el.src; }
+        else if (el.tagName === 'LINK' && el.rel.includes('icon')) { type = 'favicon'; url = el.href; }
+        else { return; } // Skip if type is unknown
+
+        // Resolve relative URLs and handle protocol-relative URLs
+        if (url.startsWith('//')) {
+           url = `${window.location.protocol}${url}`;
         }
-      });
-      
-      // Check if script is from a different domain
-      if (src.startsWith('http') && !(fullUrl.includes(document.location.hostname))) {
-        const scriptDomain = new URL(fullUrl).hostname;
+        const absoluteUrl = new URL(url, document.baseURI).href;
         
-        // Add to external resources regardless
-        iocsObject.external_resources.push({
-          type: "script",
-          url: fullUrl,
-          domain: scriptDomain
-        });
-        
-        // If script looks suspicious, flag it specifically
-        if (isSuspicious) {
-          foundSuspiciousScripts = true;
+        // Skip data URIs for domain analysis but maybe list them?
+        if (absoluteUrl.startsWith('data:')) {
+            resources.push({ type: type, url: 'data:... (truncated)' });
+            return;
+        }
+
+        domain = new URL(absoluteUrl).hostname;
+
+        resources.push({ type: type, url: absoluteUrl });
+
+        // Count domains
+        domains[domain] = (domains[domain] || 0) + 1;
+
+        // Check if domain is whitelisted or matches a known brand
+        if (!isWhitelisted(domain) && !checkBrandDomain(domain)) {
+          suspiciousUrls.push(absoluteUrl);
           iocsObject.iocs.push({
-            type: "suspicious_script",
-            value: fullUrl,
-            description: `External script likely handling form data (${reason.join(', ')})`,
-            severity: "high"
+            type: "suspicious_url",
+            value: absoluteUrl,
+            description: "External resource loaded from non-whitelisted source",
+            severity: "medium" // Or adjust based on domain reputation later
           });
         }
-      } else if (isSuspicious) {
-        // Local but suspicious script
-        foundSuspiciousScripts = true;
-        iocsObject.iocs.push({
-          type: "suspicious_script", 
-          value: src,
-          description: `Script likely handling form data (${reason.join(', ')})`,
-          severity: "medium"
-        });
+      } catch (e) {
+        console.warn(`[IOCScout] Error processing resource URL: ${url}`, e);
+        // Optionally add to metadata errors
+        // iocsObject.metadata.errors.push({ function: "detectExternalResources", error: `Invalid resource URL: ${url}` });
       }
     });
-    
-    // Add validator.js specifically as a high-risk indicator if found
-    const validatorScripts = scripts.filter(script => {
-      const src = script.getAttribute('src') || "";
-      return src.includes("validator.js");
-    });
-    
-    if (validatorScripts.length > 0) {
-      foundSuspiciousScripts = true;
-      const src = validatorScripts[0].getAttribute('src') || "";
-      const fullUrl = new URL(src, document.location).href;
-      
-      iocsObject.iocs.push({
-        type: "exfil_script",
-        value: fullUrl,
-        description: "validator.js script detected - commonly used in phishing kits for credential exfiltration",
-        severity: "critical" 
-      });
-      
-      if (!iocsObject.tactics.includes("credential_exfiltration")) {
-        iocsObject.tactics.push("credential_exfiltration");
-      }
-    }
-    
-    // Add to tactics if suspicious scripts found
-    if (foundSuspiciousScripts && !iocsObject.tactics.includes("external_resources")) {
+
+    iocsObject.external_resources = resources;
+    iocsObject.metadata.resource_domains = Object.entries(domains)
+                                              .map(([domain, count]) => ({ domain, count }))
+                                              .sort((a, b) => b.count - a.count); // Sort by count
+
+    if (suspiciousUrls.length > 0 && !iocsObject.tactics.includes("external_resources")) {
       iocsObject.tactics.push("external_resources");
     }
   }
 
-  function calculateThreatScore(mainObject) {
-    let score = mainObject.classification.confidence_score; // Start with base confidence
-    let severity = "low";
-    
-    // Increase score based on tactics
-    const tacticWeights = {
-      "credential_form_detected": 0.2,
-      "brand_impersonation": 0.15,
-      "typosquatting": 0.15,
-      "telegram_exfiltration": 0.15,
-      "2fa_phishing": 0.2,
-      "tech_support_scam": 0.3,
-      "crypto_phishing": 0.15,
-      "gaming_phishing": 0.15,
-      "anti_analysis": 0.05,
-      "code_obfuscation": 0.1,
-      "decentralized_hosting": 0.1,
-      "platform_abuse": 0.05,
-      "fullscreen_takeover": 0.1,
-      "iframe_manipulation": 0.1,
-      "suspicious_domain": 0.05,
-      "deceptive_links": 0.1,
-      "spear_phishing": 0.3,
-      "advanced_evasion": 0.2
-    };
-    
-    mainObject.tactics.forEach(tactic => {
-      score += tacticWeights[tactic] || 0;
-    });
-    
-    // Increase score based on high severity IOCs
-    const highSeverityIOCs = mainObject.iocs.filter(ioc => ioc.severity === 'high').length;
-    score += highSeverityIOCs * 0.05;
-    
-    // Cap score at 1.0
-    score = Math.min(score, 1.0);
-    
-    // Determine severity based on score
-    if (score >= 0.8) {
-      severity = "critical";
-    } else if (score >= 0.6) {
-      severity = "high";
-    } else if (score >= 0.3) {
-      severity = "medium";
-    } else {
-      severity = "low";
-    }
-    
-    // Update the main object
-    mainObject.classification.confidence_score = parseFloat(score.toFixed(2));
-    mainObject.classification.severity = severity;
-    
-    // Add final classification note
-    addClassificationNote(mainObject, `Final classification: ${severity} (Score: ${score.toFixed(2)})`);
-  }
-
-  // Detects pre-filled credentials indicating spear phishing
   function detectPrefilledCredentials(document, iocsObject) {
     const emailInputs = Array.from(document.querySelectorAll('input[type="email"], input[type="text"]'));
     
@@ -1754,10 +1620,474 @@
     }
   }
 
+  // Detects anchor tags used as submit buttons pointing to suspicious URLs
+  function detectSuspiciousSubmitLinks(document, iocsObject) {
+    // Select potential submit links (adjust selectors as needed)
+    const submitLinks = Array.from(document.querySelectorAll('a[id*="submit"], a[class*="submit"], a[id*="signin"], a[class*="signin"], a[onclick*="validate"], a[data-bind*="submit"]'));
+    
+    submitLinks.forEach(link => {
+      const href = link.getAttribute('href');
+      if (!href || href === '#' || href.startsWith('javascript:')) {
+        return; // Skip irrelevant hrefs
+      }
+      
+      try {
+        const linkUrl = new URL(href, document.location.href);
+        const linkDomain = linkUrl.hostname;
+        const currentDomain = document.location.hostname;
+        
+        // Define known legitimate domains (add more as needed)
+        const legitimateDomains = ['microsoft.com', 'live.com', 'google.com', 'apple.com', currentDomain]; 
+        const isLegitimate = legitimateDomains.some(d => linkDomain.endsWith(d));
+        
+        if (!isLegitimate) {
+          iocsObject.iocs.push({
+            type: "exfiltration_redirect_url",
+            value: linkUrl.href,
+            description: `Submit link/button points to suspicious domain: ${linkDomain}`,
+            severity: "critical"
+          });
+          
+          // Add exfil endpoint
+          iocsObject.network_behavior.exfil_endpoints.push({
+            url: linkUrl.href,
+            description: `Detected via submit link href pointing to ${linkDomain}`,
+            type: "html_link"
+          });
+
+          // Add tactic if not present
+          if (!iocsObject.tactics.includes("credential_exfiltration")) {
+            iocsObject.tactics.push("credential_exfiltration");
+          }
+           if (!iocsObject.tactics.includes("suspicious_redirection")) {
+            iocsObject.tactics.push("suspicious_redirection");
+          }
+        }
+      } catch (e) {
+        console.error(`[IOCScout] Error processing submit link href ${href}:`, e);
+        iocsObject.metadata.errors.push({ function: "detectSuspiciousSubmitLinks", error: `Invalid link href: ${href}` });
+      }
+    });
+  }
+
+  // Modify the detectThirdPartyApiExfil function
+  function detectThirdPartyApiExfil(document, iocsObject) {
+    debugLog("Checking for third-party API exfiltration...");
+    
+    // Get all inline and external scripts
+    const scripts = Array.from(document.querySelectorAll('script'));
+    const scriptContents = [];
+    
+    // Get content from inline scripts
+    scripts.filter(s => !s.src).forEach(script => {
+      scriptContents.push(script.textContent);
+    });
+    
+    // Define patterns for third-party API exfiltration
+    const exfilPatterns = [
+      // EmailJS patterns
+      {
+        name: "EmailJS",
+        patterns: [
+          /emailjs\.send\s*\(/i,
+          /api\.emailjs\.com\/api\/v[0-9.]+\/email\/send/i,
+          /service_[a-zA-Z0-9]+/i,
+          /template_[a-zA-Z0-9]+/i,
+          /emailjs\.init\s*\(/i
+        ],
+        endpoint: "https://api.emailjs.com/api/v1.0/email/send",
+        severity: "critical"
+      },
+      // Formspree patterns
+      {
+        name: "Formspree",
+        patterns: [
+          /formspree\.io/i
+        ],
+        endpoint: "https://formspree.io",
+        severity: "critical"
+      },
+      // Web3Forms patterns
+      {
+        name: "Web3Forms",
+        patterns: [
+          /web3forms\.com\/api/i,
+          /forms\.web3forms\.com/i
+        ],
+        endpoint: "https://api.web3forms.com/submit",
+        severity: "critical"
+      },
+      // FormSubmit patterns
+      {
+        name: "FormSubmit",
+        patterns: [
+          /formsubmit\.co/i
+        ],
+        endpoint: "https://formsubmit.co",
+        severity: "critical"
+      },
+      // Zapier Webhook patterns
+      {
+        name: "Zapier Webhooks",
+        patterns: [
+          /hooks\.zapier\.com/i
+        ],
+        endpoint: "https://hooks.zapier.com",
+        severity: "critical"
+      }
+    ];
+    
+    // --- ADD IP Lookup Patterns ---
+    const ipLookupPatterns = [
+        /api\.db-ip\.com/i,
+        /ipinfo\.io/i,
+        /ip-api\.com/i,
+        /ipapi\.co/i,
+        /ipgeolocation\.io/i
+    ];
+    let ipLookupDetected = false;
+    // --- END ADD ---
+
+    // Check each script content against each exfil pattern
+    scriptContents.forEach(content => {
+      exfilPatterns.forEach(exfilType => {
+        const matches = exfilType.patterns.some(pattern => pattern.test(content));
+        if (matches) {
+          // Add to IOCs
+          iocsObject.iocs.push({
+            type: "third_party_api_exfiltration",
+            value: exfilType.name,
+            description: `${exfilType.name} API detected - commonly abused for credential exfiltration`,
+            severity: exfilType.severity
+          });
+          
+          // Add to exfil endpoints
+          iocsObject.network_behavior.exfil_endpoints.push({
+            url: exfilType.endpoint,
+            description: `${exfilType.name} API endpoint detected in page scripts`,
+            type: "third_party_api"
+          });
+
+          // Add to tactics
+          if (!iocsObject.tactics.includes("credential_exfiltration")) {
+            iocsObject.tactics.push("credential_exfiltration");
+          }
+          
+          // Extract API keys if possible (especially for EmailJS)
+          if (exfilType.name === "EmailJS") {
+            // Extract service IDs (no change needed)
+            const serviceIdMatch = /service_[a-zA-Z0-9]+/i.exec(content);
+            if (serviceIdMatch) {
+              iocsObject.iocs.push({
+                type: "api_key",
+                value: serviceIdMatch[0],
+                description: `EmailJS service ID found in page scripts`,
+                severity: "medium"
+              });
+            }
+            
+            // --- MODIFIED User ID Regex ---
+            // Look for assignment or a likely key pattern within quotes, avoiding common JS words
+            const userIdMatch = /userId\s*=\s*["']([a-zA-Z0-9_-]{15,30})["']/i.exec(content) || 
+                                /(?<![a-zA-Z])["']([a-zA-Z0-9_-]{20,30})["'](?!=[a-zA-Z])/i.exec(content); // More specific pattern in quotes
+            // --- END MODIFICATION ---
+            
+            if (userIdMatch && userIdMatch[1] && !/function|document|window|return|const|var|let|this/i.test(userIdMatch[1])) { // Add keyword check
+              iocsObject.iocs.push({
+                type: "api_key",
+                value: userIdMatch[1], // Use captured group 1
+                description: `EmailJS user ID/API key found in page scripts`,
+                severity: "medium"
+              });
+            }
+            
+            // Extract template IDs (no change needed)
+            const templateIdMatch = /template_[a-zA-Z0-9]+/i.exec(content);
+            if (templateIdMatch) {
+              iocsObject.iocs.push({
+                type: "api_key",
+                value: templateIdMatch[0],
+                description: `EmailJS template ID found in page scripts`,
+                severity: "medium"
+              });
+            }
+          }
+        }
+      });
+
+      // --- ADD IP Lookup Check ---
+      ipLookupPatterns.forEach(pattern => {
+          if (pattern.test(content)) {
+              ipLookupDetected = true;
+              const domainMatch = pattern.exec(content);
+              iocsObject.iocs.push({
+                  type: "info_gathering",
+                  value: domainMatch ? domainMatch[0] : "IP Lookup Service",
+                  description: "Script attempts to fetch user IP/geolocation.",
+                  severity: "medium"
+              });
+              // Add tactic if not present
+              if (!iocsObject.tactics.includes("information_gathering")) {
+                  iocsObject.tactics.push("information_gathering");
+              }
+          }
+      });
+      // --- END ADD ---
+    });
+    
+    // Additionally look for these patterns in external script URLs
+    scripts.filter(s => s.src).forEach(script => {
+      const src = script.src.toLowerCase();
+      
+      // Fixed ternary operator with proper default value
+      const serviceName = 
+        src.includes('emailjs') ? 'EmailJS' :
+        src.includes('formspree') ? 'Formspree' :
+        src.includes('web3forms') ? 'Web3Forms' : null;
+      
+      // Fixed conditional block structure
+      if (serviceName) {
+        console.log(`Service detected: ${serviceName}`);
+        
+        iocsObject.iocs.push({
+          type: "suspicious_script_source",
+          value: script.src,
+          description: `Script loaded from ${serviceName} - commonly used for credential exfiltration`,
+          severity: "high"
+        });
+        
+        if (!iocsObject.tactics.includes("credential_exfiltration")) {
+          iocsObject.tactics.push("credential_exfiltration");
+        }
+      }
+    });
+  }
+
+  // Add this new function definition before collectIOCs()
+  function detectSocialEngineeringLinks(document, iocsObject) {
+    debugLog("Checking for social engineering links (WhatsApp, Telegram)...");
+    let foundLink = false;
+
+    const links = document.querySelectorAll('a[href]');
+
+    links.forEach(link => {
+      const href = link.href || "";
+
+      // Check for WhatsApp links (wa.me)
+      if (href.startsWith("https://wa.me/")) {
+        foundLink = true;
+        const phoneNumber = href.split('/')[3]?.split('?')[0] || "unknown";
+        iocsObject.iocs.push({
+          type: "social_engineering_link",
+          value: `WhatsApp: ${phoneNumber}`,
+          description: "Link directs users to WhatsApp, potentially for scams or phishing.",
+          severity: "high"
+        });
+        debugLog(`Found WhatsApp link: ${href}`);
+      }
+      
+      // Check for Telegram links (t.me)
+      else if (href.startsWith("https://t.me/")) {
+         foundLink = true;
+         const usernameOrGroup = href.split('/')[3]?.split('?')[0] || "unknown";
+         iocsObject.iocs.push({
+           type: "social_engineering_link",
+           value: `Telegram: ${usernameOrGroup}`,
+           description: "Link directs users to Telegram, potentially for scams or phishing.",
+           severity: "high"
+         });
+         debugLog(`Found Telegram link: ${href}`);
+      }
+      
+      // Add checks for other platforms if needed (e.g., Discord invite links)
+      // else if (href.includes("discord.gg/") || href.includes("discord.com/invite/")) { ... }
+
+    });
+
+    if (foundLink) {
+      if (!iocsObject.tactics.includes("social_engineering")) {
+        iocsObject.tactics.push("social_engineering");
+      }
+      iocsObject.classification.notes.push("Contains direct social engineering contact links (e.g., WhatsApp, Telegram).");
+    }
+  }
+
+  // --- Modify detectSuspiciousKeywords ---
+  function detectSuspiciousKeywords(document, iocsObject) {
+    debugLog("Checking for suspicious keywords...");
+    const keywordsConfig = [
+      // Keep login/credential keywords
+      { type: "credential_form_keywords", keywords: ["login", "signin", "password", "username", "userid", "credential", "account", "authenticate"], severity: "medium", tactic: "credential_access" },
+      // Keep financial keywords
+      { type: "financial_keywords", keywords: ["bank", "credit card", "payment", "invoice", "billing", "wire transfer", "account number"], severity: "high", tactic: "financial_theft" },
+      // Keep urgency keywords
+      { type: "urgency_keywords", keywords: ["urgent", "important", "action required", "verify", "confirm", "suspended", "locked", "unusual activity"], severity: "medium", tactic: "social_engineering" },
+      
+      // --- REMOVE E-COMMERCE KEYWORDS ---
+      // { type: "ecommerce_content", keywords: ["cart", "checkout", "shipping", "payment", "order", "product", "item", "price", "discount", "sale", "promotion"], severity: "medium", tactic: "ecommerce_phishing" },
+      
+      // Keep gaming keywords (but maybe review later if they cause issues)
+      { type: "gaming_phishing", keywords: ["game key", "skin drop", "item trade", "account recovery", "free credits", "virtual currency"], severity: "medium", tactic: "gaming_phishing" },
+      // Keep support scam keywords
+      { type: "support_scam", keywords: ["support", "helpdesk", "technician", "virus", "malware", "error code", "call now"], severity: "high", tactic: "support_scam" }
+    ];
+
+    const bodyText = document.body.innerText.toLowerCase();
+    let foundKeywords = {}; // Track found types to avoid duplicates
+
+    keywordsConfig.forEach(config => {
+      config.keywords.forEach(keyword => {
+        if (bodyText.includes(keyword) && !foundKeywords[config.type]) {
+          iocsObject.iocs.push({
+            type: config.type,
+            value: keyword, // Report the specific keyword found
+            description: `Suspicious keyword related to ${config.type.replace(/_/g, ' ')} detected: "${keyword}"`,
+            severity: config.severity
+          });
+          if (config.tactic && !iocsObject.tactics.includes(config.tactic)) {
+            iocsObject.tactics.push(config.tactic);
+          }
+          // Add note to classification
+          iocsObject.classification.notes.push(`Contains keywords related to ${config.type.replace(/_/g, ' ')}.`);
+          foundKeywords[config.type] = true; // Mark type as found
+          debugLog(`Found suspicious keyword type: ${config.type}, keyword: ${keyword}`);
+        }
+      });
+    });
+  }
+
+  // --- Modify detectDeceptiveLinks ---
+  function detectDeceptiveLinks(document, iocsObject) {
+    debugLog("Checking for deceptive links...");
+    const links = document.querySelectorAll('a[href]');
+    const currentDomain = document.location.hostname;
+    let foundDeceptive = false;
+
+    // Keywords/classes often used for primary action buttons
+    const actionKeywords = ['login', 'signin', 'daftar', 'register', 'submit', 'continue', 'next', 'download', 'claim', 'verify', 'confirm', 'alternatif link'];
+    const actionClasses = ['button', 'btn', 'action', 'submit', 'primary', 'animated-button1']; // Add classes common in phishing kits
+
+    links.forEach(link => {
+      const href = link.href;
+      const text = link.innerText.toLowerCase();
+      let linkDomain = null;
+      try {
+          // Ensure href is valid before creating URL object
+          if (href && (href.startsWith('http') || href.startsWith('//'))) {
+             linkDomain = new URL(href, document.baseURI).hostname;
+          } else if (href && !href.startsWith('javascript:') && !href.startsWith('mailto:') && !href.startsWith('#')) {
+             // Handle relative paths if needed, assume same domain if relative
+             linkDomain = currentDomain; 
+          }
+      } catch (e) {
+          console.warn(`[IOCScout] Could not parse link domain for href: ${href}`, e);
+      }
+
+
+      // 1. Link text mismatch (uses global 'brands')
+      brands.forEach(brand => {
+        // Ensure linkDomain is valid before proceeding
+        if (linkDomain && brand.patterns.some(pattern => pattern.test(text)) && !brand.patterns.some(pattern => pattern.test(linkDomain)) && linkDomain !== currentDomain) {
+          iocsObject.iocs.push({
+            type: "deceptive_link_text",
+            value: href,
+            description: `Link text "${link.innerText}" suggests ${brand.name}, but points to ${linkDomain}`,
+            severity: "high"
+          });
+          foundDeceptive = true;
+        }
+      });
+
+      // 2. Generic text links pointing to different domains
+      if (!foundDeceptive && /click here|continue|next|download|verify|confirm/i.test(text) && linkDomain && linkDomain !== currentDomain) {
+         iocsObject.iocs.push({
+            type: "deceptive_link_generic",
+            value: href,
+            description: `Generic action link "${link.innerText}" points to external domain: ${linkDomain}`,
+            severity: "medium"
+         });
+         foundDeceptive = true;
+      }
+
+      // 3. Check for primary action buttons pointing to suspicious external domains
+      const isActionButton = actionKeywords.some(kw => text.includes(kw)) || 
+                             actionClasses.some(cls => link.classList.contains(cls));
+      // Ensure linkDomain is valid before checking whitelist
+      const isSuspiciousExternal = linkDomain && linkDomain !== currentDomain && 
+                                   !isWhitelisted(linkDomain); 
+
+      if (isActionButton && isSuspiciousExternal) {
+          iocsObject.iocs.push({
+            type: "suspicious_action_link",
+            value: href,
+            description: `Primary action button/link "${link.innerText}" points to suspicious external domain: ${linkDomain}`,
+            severity: "high" 
+          });
+          // Also add to exfil endpoints as a potential redirect/exfil stage
+          if (!iocsObject.network_behavior.exfil_endpoints.some(ep => ep.url === href)) {
+              iocsObject.network_behavior.exfil_endpoints.push({
+                  url: href,
+                  description: `Suspicious redirect link found in primary action button`,
+                  type: "redirect_link"
+              });
+          }
+          foundDeceptive = true; 
+          debugLog(`Found suspicious action link: ${href}`);
+      }
+
+    });
+
+    if (foundDeceptive && !iocsObject.tactics.includes("deception")) {
+      iocsObject.tactics.push("deception");
+    }
+  }
+
+  // --- ADD calculateThreatScore FUNCTION DEFINITION ---
+  function calculateThreatScore(iocsObject) {
+    debugLog("Calculating threat score...");
+    let score = 0;
+    const severityWeights = {
+      critical: 5,
+      high: 3,
+      medium: 2,
+      low: 1,
+      info: 0 // Or adjust as needed
+    };
+
+    // Simple scoring based on IOC severity
+    iocsObject.iocs.forEach(ioc => {
+      score += severityWeights[ioc.severity] || 0; // Add score based on severity, default to 0 if severity unknown
+    });
+
+    // You could add more complex logic here:
+    // - Boost score for specific combinations of tactics (e.g., credential_form + exfiltration)
+    // - Boost score for critical brands (e.g., banking, government)
+    // - Adjust score based on domain reputation (if available)
+
+    // Assign the calculated score
+    iocsObject.threat_score = score;
+
+    // Determine a qualitative rating based on score thresholds (adjust thresholds as needed)
+    let rating = "Informational";
+    if (score >= 15) {
+      rating = "Critical";
+    } else if (score >= 10) {
+      rating = "High";
+    } else if (score >= 5) {
+      rating = "Medium";
+    } else if (score > 0) {
+      rating = "Low";
+    }
+    iocsObject.threat_rating = rating;
+
+    debugLog(`Calculated Threat Score: ${score}, Rating: ${rating}`);
+  }
+  // --- END FUNCTION DEFINITION ---
+
   // --- Main Collection Function ---
   function collectIOCs() {
     debugLog("Starting IOC collection...");
-
+    
     // Initialize result object (keep your existing initialization)
     const iocsObject = {
       domain: document.location.hostname,
@@ -1779,54 +2109,52 @@
       },
       metadata: {
         errors: [] // Track any errors that occur
-      }
+      },
+      threat_score: 0, // Initialize score
+      threat_rating: "Informational" // Initialize rating
     };
+
+    // Keep window.iocsObject reference for async access from script analysis
+    window.iocsObject = iocsObject;
 
     // Run all detection functions directly with try/catch
     try { detectBrands(document, iocsObject); } catch(e) {
       console.error("Error in detectBrands:", e);
       iocsObject.metadata.errors.push({ function: "detectBrands", error: e.message });
     }
-
     try { detectSuspiciousIframes(document, iocsObject); } catch(e) {
       console.error("Error in detectSuspiciousIframes:", e);
       iocsObject.metadata.errors.push({ function: "detectSuspiciousIframes", error: e.message });
     }
-
     try { detectFullScreenTechniques(document, iocsObject); } catch(e) {
       console.error("Error in detectFullScreenTechniques:", e);
       iocsObject.metadata.errors.push({ function: "detectFullScreenTechniques", error: e.message });
     }
-
     try { detectCredentialForms(document, iocsObject); } catch(e) {
       console.error("Error in detectCredentialForms:", e);
       iocsObject.metadata.errors.push({ function: "detectCredentialForms", error: e.message });
     }
-
     try { detectBase64Obfuscation(document, iocsObject); } catch(e) {
       console.error("Error in detectBase64Obfuscation:", e);
       iocsObject.metadata.errors.push({ function: "detectBase64Obfuscation", error: e.message });
     }
-
     try { detectAntiAnalysis(document, iocsObject); } catch(e) {
       console.error("Error in detectAntiAnalysis:", e);
       iocsObject.metadata.errors.push({ function: "detectAntiAnalysis", error: e.message });
     }
-
     try { detectSuspiciousDomains(document, iocsObject); } catch(e) {
       console.error("Error in detectSuspiciousDomains:", e);
       iocsObject.metadata.errors.push({ function: "detectSuspiciousDomains", error: e.message });
     }
-
     try { detectDomainTyposquatting(document, iocsObject); } catch(e) {
       console.error("Error in detectDomainTyposquatting:", e);
       iocsObject.metadata.errors.push({ function: "detectDomainTyposquatting", error: e.message });
     }
 
     // Collect resources before analyzing them
-    try { collectExternalResources(document, iocsObject); } catch(e) {
-      console.error("Error in collectExternalResources:", e);
-      iocsObject.metadata.errors.push({ function: "collectExternalResources", error: e.message });
+    try { detectExternalResources(document, iocsObject); } catch(e) {
+      console.error("Error in detectExternalResources:", e);
+      iocsObject.metadata.errors.push({ function: "detectExternalResources", error: e.message });
     }
 
     // Now analyze resource domains
@@ -1834,77 +2162,84 @@
       console.error("Error in analyzeResourceDomains:", e);
       iocsObject.metadata.errors.push({ function: "analyzeResourceDomains", error: e.message });
     }
-
     try { detectPlatformAbuse(document, iocsObject); } catch(e) {
       console.error("Error in detectPlatformAbuse:", e);
       iocsObject.metadata.errors.push({ function: "detectPlatformAbuse", error: e.message });
     }
-
     try { detectCryptoContent(document, iocsObject); } catch(e) {
       console.error("Error in detectCryptoContent:", e);
       iocsObject.metadata.errors.push({ function: "detectCryptoContent", error: e.message });
     }
-
     try { detectEcommerceSite(document, iocsObject); } catch(e) {
       console.error("Error in detectEcommerceSite:", e);
       iocsObject.metadata.errors.push({ function: "detectEcommerceSite", error: e.message });
     }
-
-    try { detectGamingPhishing(document, iocsObject); } catch(e) {
-      console.error("Error in detectGamingPhishing:", e);
-      iocsObject.metadata.errors.push({ function: "detectGamingPhishing", error: e.message });
-    }
-
     try { detectSuspiciousLinks(document, iocsObject); } catch(e) {
       console.error("Error in detectSuspiciousLinks:", e);
       iocsObject.metadata.errors.push({ function: "detectSuspiciousLinks", error: e.message });
     }
-
     try { detectAPIExfiltration(document, iocsObject); } catch(e) {
       console.error("Error in detectAPIExfiltration:", e);
       iocsObject.metadata.errors.push({ function: "detectAPIExfiltration", error: e.message });
     }
-
     try { detect2FAPhishing(document, iocsObject); } catch(e) {
       console.error("Error in detect2FAPhishing:", e);
       iocsObject.metadata.errors.push({ function: "detect2FAPhishing", error: e.message });
     }
-
     try { detectURLShorteners(document, iocsObject); } catch(e) {
       console.error("Error in detectURLShorteners:", e);
       iocsObject.metadata.errors.push({ function: "detectURLShorteners", error: e.message });
     }
-
     try { detectTechSupportScam(document, iocsObject); } catch(e) {
       console.error("Error in detectTechSupportScam:", e);
       iocsObject.metadata.errors.push({ function: "detectTechSupportScam", error: e.message });
     }
-
     try { detectDecentralizedHosting(document, iocsObject); } catch(e) {
       console.error("Error in detectDecentralizedHosting:", e);
       iocsObject.metadata.errors.push({ function: "detectDecentralizedHosting", error: e.message });
     }
-
     try { detectPrefilledCredentials(document, iocsObject); } catch(e) {
       console.error("Error in detectPrefilledCredentials:", e);
       iocsObject.metadata.errors.push({ function: "detectPrefilledCredentials", error: e.message });
     }
-
     try { detectCampaignTrackers(document, iocsObject); } catch(e) {
       console.error("Error in detectCampaignTrackers:", e);
       iocsObject.metadata.errors.push({ function: "detectCampaignTrackers", error: e.message });
     }
-
     try { detectAntiScanningTechniques(document, iocsObject); } catch(e) {
       console.error("Error in detectAntiScanningTechniques:", e);
       iocsObject.metadata.errors.push({ function: "detectAntiScanningTechniques", error: e.message });
     }
-
-    try { analyzeExternalScripts(document, iocsObject); } catch(e) {
-      console.error("Error in analyzeExternalScripts:", e);
-      iocsObject.metadata.errors.push({ function: "analyzeExternalScripts", error: e.message });
+    try { detectSuspiciousSubmitLinks(document, iocsObject); } catch(e) {
+      console.error("Error in detectSuspiciousSubmitLinks:", e);
+      iocsObject.metadata.errors.push({ function: "detectSuspiciousSubmitLinks", error: e.message });
+    }
+    try { detectThirdPartyApiExfil(document, iocsObject); } catch(e) {
+      console.error("Error in detectThirdPartyApiExfil:", e);
+      iocsObject.metadata.errors.push({ function: "detectThirdPartyApiExfil", error: e.message });
+    }
+    // --- ADD CALL TO NEW DETECTOR ---
+    try { detectSocialEngineeringLinks(document, iocsObject); } catch(e) { 
+      console.error("Error in detectSocialEngineeringLinks:", e);
+      iocsObject.metadata.errors.push({ function: "detectSocialEngineeringLinks", error: e.message });
+    }
+    // --- END ADD ---
+    try { detectSuspiciousKeywords(document, iocsObject); } catch(e) { 
+      console.error("Error in detectSuspiciousKeywords:", e);
+      iocsObject.metadata.errors.push({ function: "detectSuspiciousKeywords", error: e.message });
+    }
+    try { detectDeceptiveLinks(document, iocsObject); } catch(e) { 
+      console.error("Error in detectDeceptiveLinks:", e);
+      iocsObject.metadata.errors.push({ function: "detectDeceptiveLinks", error: e.message });
     }
 
+    // --- REMOVE E-COMMERCE TACTIC IF PRESENT (Optional Cleanup) ---
+    // This ensures the tactic isn't added by mistake elsewhere if the IOC is removed
+    // const ecommerceIndex = iocsObject.tactics.indexOf("ecommerce_phishing");
+    // if (ecommerceIndex > -1 && !iocsObject.iocs.some(ioc => ioc.type === 'ecommerce_content')) {
+    //    iocsObject.tactics.splice(ecommerceIndex, 1);
+    // }
+    
     // Calculate threat score
     try {
       calculateThreatScore(iocsObject);
@@ -1916,11 +2251,15 @@
       });
     }
 
-    debugLog("IOC collection complete. Sending results...");
-    console.log("Final IOCs Object:", iocsObject); // Log the final object for debugging
+    debugLog("IOC collection complete (sync part). Sending results...");
+    console.log("IOCs Object (may not include full async script analysis):", iocsObject);
 
     // Send results via chrome.runtime.sendMessage (like in your backup)
+    // This message goes to background.js to be saved
     chrome.runtime.sendMessage({ type: "save_iocs", data: iocsObject });
+
+    // Clean up global reference immediately after sending message
+    window.iocsObject = null;
 
     return iocsObject; // Still return in case it's needed elsewhere
   }
@@ -1947,6 +2286,8 @@
 
   // Let the extension know the content script is loaded
   chrome.runtime.sendMessage({ type: "content_script_ready" });
-
   debugLog("Content script initialized and ready.");
+
+  // Call this at the end of your IIFE
+  setupDebugHelpers();
 })();
